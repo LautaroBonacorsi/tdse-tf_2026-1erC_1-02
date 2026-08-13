@@ -66,7 +66,7 @@ const task_sensor_cfg_t task_sensor_cfg_list[] = {
 };
 
 task_sensor_dta_t task_sensor_dta_list[SENSOR_DTA_QTY];
-static uint8_t dip_switch_val = 0;
+//static uint8_t dip_switch_val = 0;
 
 /********************** internal functions declaration ***********************/
 void task_sensor_statechart(uint32_t index);
@@ -125,7 +125,7 @@ void task_sensor_update(void *parameters)
 	}
 
 	/* 2. Update DIP Switch state */
-	uint8_t new_dip = 0;
+	/*uint8_t new_dip = 0;
 	if (DIP_ON == HAL_GPIO_ReadPin(DIP1_PORT, DIP1_PIN)) { new_dip |= 0x01; }
 	if (DIP_ON == HAL_GPIO_ReadPin(DIP2_PORT, DIP2_PIN)) { new_dip |= 0x02; }
 	if (DIP_ON == HAL_GPIO_ReadPin(DIP3_PORT, DIP3_PIN)) { new_dip |= 0x04; }
@@ -134,7 +134,7 @@ void task_sensor_update(void *parameters)
 	if (new_dip != dip_switch_val) {
 		dip_switch_val = new_dip;
 		LOGGER_INFO("DIP Switch modificado: 0x%02X", dip_switch_val);
-	}
+	}*/
 }
 
 /********************** internal functions definition ************************/

@@ -15,8 +15,10 @@
 extern "C" {
 #endif
 
-/* Tamaño de búfer para 1 segundo a 100 Hz */
-#define ALGO_BUFFER_SIZE 100ul
+#include "spo2_algorithm.h"
+
+/* Tamaño de búfer para 4 segundos a 100 Hz */
+#define ALGO_BUFFER_SIZE BUFFER_SIZE
 
 /* Variables globales para la vista desde task_system */
 extern int32_t g_algo_current_spo2;

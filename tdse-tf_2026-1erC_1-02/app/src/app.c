@@ -61,6 +61,12 @@
 extern I2C_HandleTypeDef hi2c1;
 
 /********************** macros and definitions *******************************/
+#define TASK_X_NOE_INI		0ul
+#define TASK_X_LET_INI		0ul
+#define TASK_X_BCET_INI		1000ul
+#define TASK_X_WCET_INI		0ul
+#define TASK_X_DELAY_MIN	0ul
+
 typedef struct {
 	void (*task_init)(void *);		// Pointer to task (must be a
 									// 'void (void *)' function)
@@ -68,6 +74,13 @@ typedef struct {
 									// 'void (void *)' function)
 	void *parameters;				// Pointer to parameters
 } task_cfg_t;
+
+typedef struct {
+    uint32_t NOE;		// Number of execution (numeral)
+    uint32_t LET;		// Last execution time (microseconds)
+    uint32_t BCET;		// Best-case execution time (microseconds)
+    uint32_t WCET;		// Worst-case execution time (microseconds)
+} task_dta_t;
 
 /********************** internal data declaration ****************************/
 const task_cfg_t task_cfg_list[] = {
@@ -80,11 +93,14 @@ const task_cfg_t task_cfg_list[] = {
 
 #define TASK_QTY	(sizeof(task_cfg_list)/sizeof(task_cfg_t))
 
+task_dta_t task_dta_list[TASK_QTY];
+
 /********************** internal functions declaration ***********************/
 
 /********************** internal data definition *****************************/
 uint32_t g_app_cnt = 0;
 uint32_t g_wcet = 0;
+uint32_t g_app_runtime_us = 0;
 
 const char *p_app	= "Bare Metal - Event-Triggered Systems (ETS)";
 const char *p_app_	= "App - Model Integration - C codig";
@@ -123,6 +139,12 @@ void app_init(void)
 			/* Run task_x_init */
 			(*task_cfg_list[index].task_init)(task_cfg_list[index].parameters);
 		}
+		
+		/* Init variables */
+		task_dta_list[index].NOE = TASK_X_NOE_INI;
+		task_dta_list[index].LET = TASK_X_LET_INI;
+		task_dta_list[index].BCET = TASK_X_BCET_INI;
+		task_dta_list[index].WCET = TASK_X_WCET_INI;
 	}
 	
 	LOGGER_INFO("Aplicacion iniciada correctamente.");
@@ -148,9 +170,10 @@ void app_update(void)
 	{
     	/* Update App Counter */
 		g_app_cnt++;
+		g_app_runtime_us = 0;
 
 		/* Update tasks */
-		cycle_counter_reset();
+		uint32_t total_cycles_start = cycle_counter_get();
 		
 		/* Update EEPROM driver state machine */
 		eeprom_update();
@@ -161,17 +184,36 @@ void app_update(void)
 		/* Go through the task arrays */
 		for (index = 0; TASK_QTY > index; index++)
 		{
+			cycle_counter_reset();
+
 			if (NULL != task_cfg_list[index].task_update)
 			{
     			/* Run task_x_update */
 				(*task_cfg_list[index].task_update)(task_cfg_list[index].parameters);
 			}
+
+			/* Update variables */
+			task_dta_list[index].NOE++;
+
+			task_dta_list[index].LET = cycle_counter_get_time_us();
+
+			if (task_dta_list[index].BCET > task_dta_list[index].LET)
+			{
+				task_dta_list[index].BCET = task_dta_list[index].LET;
+			}
+
+			if (task_dta_list[index].WCET < task_dta_list[index].LET)
+			{
+				task_dta_list[index].WCET = task_dta_list[index].LET;
+			}
+
+			g_app_runtime_us += task_dta_list[index].LET;
 		}
 
-		/* Measure WCET */
-		uint32_t cycles = cycle_counter_get();
-		if (g_wcet < cycles) {
-			g_wcet = cycles;
+		/* Measure WCET of the entire loop */
+		uint32_t total_cycles = cycle_counter_get() - total_cycles_start;
+		if (g_wcet < total_cycles) {
+			g_wcet = total_cycles;
 		}
 
 		/* Protect shared resource */

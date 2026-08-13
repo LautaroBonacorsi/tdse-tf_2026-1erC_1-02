@@ -87,11 +87,12 @@ void task_display_init(void *parameters)
 	state = ST_DSP_IDLE;
 	p_task_display_dta->state = state;
 
-	event = EV_DSP_IDLE;
-	p_task_display_dta->event = event;
-
-	b_event = false;
-	p_task_display_dta->flag = b_event;
+	if (p_task_display_dta->flag == false)
+	{
+		event = EV_DSP_IDLE;
+		p_task_display_dta->event = event;
+		p_task_display_dta->flag = false;
+	}
 
 	LOGGER_INFO(" ");
 	LOGGER_INFO("   %s = %lu   %s = %lu   %s = %s",

@@ -1,4 +1,4 @@
-﻿/*
+/*
  * Copyright (c) 2026 Juan Manuel Cruz <jcruz@fi.uba.ar> <jcruz@frba.utn.edu.ar>.
  * All rights reserved.
  *
@@ -37,6 +37,7 @@
 #include "main.h"
 #include <stdio.h>
 #include <string.h>
+
 /* Demo includes */
 #include "logger.h"
 #include "dwt.h"
@@ -64,6 +65,8 @@ extern I2C_HandleTypeDef hi2c1;
 typedef enum task_system_mode {
 	NORMAL,
 	SETUP,
+	BLOCKED_RESET,
+	BLOCKED_ERROR,
 	MODE_QTY
 } task_system_mode_t;
 
@@ -84,6 +87,7 @@ task_system_dta_t task_system_dta_list[SYSTEM_DTA_QTY];
  * 1 = umbral maximo
  * 2 = alarma
  */
+
 static int32_t g_selected_sensor = 0;
 static int32_t g_param_umbral = 0;
 
@@ -116,6 +120,7 @@ typedef struct {
 
 static sys_config_t g_current_config;
 static sys_config_t g_last_saved_config;
+static uint8_t g_current_profile_id = 1;
 
 /********************** internal functions declaration ***********************/
 static void task_system_load_config(void);
@@ -179,8 +184,11 @@ void task_system_init(void *parameters)
 
 	task_system_load_config();
 
-	task_system_set_mode(NORMAL);
-	task_system_show_normal();
+	if ((BLOCKED_RESET != g_task_system_mode) && (BLOCKED_ERROR != g_task_system_mode))
+	{
+		task_system_set_mode(NORMAL);
+		task_system_show_normal();
+	}
 }
 
 
@@ -189,22 +197,25 @@ void task_system_update(void *parameters)
 	switch (g_task_system_mode)
 	{
 		case NORMAL:
-
 			task_system_normal_statechart();
-
 			break;
 
 		case SETUP:
-
 			task_system_setup_statechart();
-
+			break;
+			
+		case BLOCKED_RESET:
+		case BLOCKED_ERROR:
+			/* Ignorar eventos, mantener bloqueado */
+			if (true == any_event_task_system())
+			{
+				get_event_task_system(); /* Consumir y descartar */
+			}
 			break;
 
 		default:
-
 			task_system_set_mode(NORMAL);
 			task_system_show_normal();
-
 			break;
 	}
 }
@@ -735,34 +746,105 @@ static void task_system_set_mode(
 	g_task_system_mode = task_system_mode;
 }
 
+static uint16_t get_eeprom_address(uint8_t profile)
+{
+	if (profile < 1 || profile > 3) profile = 1;
+	return (uint16_t)((profile - 1) * 32); /* Separados por 32 bytes */
+}
+
+static void set_default_thresholds(uint8_t profile)
+{
+	if (1 == profile)
+	{
+		g_ou_min = 92;
+		g_ou_max = 100;
+		g_pu_min = 70;
+		g_pu_max = 130;
+	}
+	else if (2 == profile)
+	{
+		g_ou_min = 90;
+		g_ou_max = 100;
+		g_pu_min = 60;
+		g_pu_max = 100;
+	}
+	else
+	{
+		g_ou_min = 88;
+		g_ou_max = 100;
+		g_pu_min = 50;
+		g_pu_max = 90;
+	}
+	b_o_alarma = true;
+	b_p_alarma = true;
+}
+
 static void task_system_load_config(void)
 {
-	sys_config_t temp_config;
+	bool d4 = (DIP_ON == HAL_GPIO_ReadPin(DIP1_PORT, DIP1_PIN));
+	bool d3 = (DIP_ON == HAL_GPIO_ReadPin(DIP2_PORT, DIP2_PIN));
+	bool d2 = (DIP_ON == HAL_GPIO_ReadPin(DIP3_PORT, DIP3_PIN));
+	bool d1 = (DIP_ON == HAL_GPIO_ReadPin(DIP4_PORT, DIP4_PIN));
+//	if(d2 == 1){
+		//printf("d2 = 1");
+	//}
 	
-	if (HAL_I2C_Mem_Read(&hi2c1, EEPROM_I2C_ADDR, 0x0000, I2C_MEMADD_SIZE_16BIT, (uint8_t*)&temp_config, sizeof(sys_config_t), 100) == HAL_OK)
+	if (d1 && d2 && d3 && d4)
 	{
-		if (temp_config.magic_word == 0x12345678)
+		/* Reinicio de fabrica. Borramos las 3 posiciones (seteamos magic word a 0) */
+		sys_config_t empty_cfg;
+		memset(&empty_cfg, 0, sizeof(sys_config_t));
+		HAL_I2C_Mem_Write(&hi2c1, EEPROM_I2C_ADDR, get_eeprom_address(1), I2C_MEMADD_SIZE_16BIT, (uint8_t*)&empty_cfg, sizeof(sys_config_t), 100);
+		HAL_Delay(10);
+		HAL_I2C_Mem_Write(&hi2c1, EEPROM_I2C_ADDR, get_eeprom_address(2), I2C_MEMADD_SIZE_16BIT, (uint8_t*)&empty_cfg, sizeof(sys_config_t), 100);
+		HAL_Delay(10);
+		HAL_I2C_Mem_Write(&hi2c1, EEPROM_I2C_ADDR, get_eeprom_address(3), I2C_MEMADD_SIZE_16BIT, (uint8_t*)&empty_cfg, sizeof(sys_config_t), 100);
+		HAL_Delay(10);
+		
+		task_system_set_mode(BLOCKED_RESET);
+		task_system_write_display("Reinicio Fabrica", "Reinicie equipo ");
+		LOGGER_INFO("Bloqueado: Reset Fabrica");
+		return;
+	}
+	
+	uint8_t count = (d1?1:0) + (d2?1:0) + (d3?1:0);
+	if (1 != count)
+	{
+		task_system_set_mode(BLOCKED_ERROR);
+		task_system_write_display("Error de perfil ", "Elija 1 y reset ");
+		LOGGER_INFO("Bloqueado: Error seleccion perfil");
+		return;
+	}
+	
+	g_current_profile_id = d1 ? 1 : (d2 ? 2 : 3);
+	uint16_t mem_addr = get_eeprom_address(g_current_profile_id);
+	
+	sys_config_t temp_config;
+	if (HAL_OK == HAL_I2C_Mem_Read(&hi2c1, EEPROM_I2C_ADDR, mem_addr, I2C_MEMADD_SIZE_16BIT, (uint8_t*)&temp_config, sizeof(sys_config_t), 100))
+	{
+		if (0x12345678 == temp_config.magic_word)
 		{
 			g_ou_max = temp_config.g_ou_max;
 			g_ou_min = temp_config.g_ou_min;
 			g_pu_max = temp_config.g_pu_max;
 			g_pu_min = temp_config.g_pu_min;
-			b_o_alarma = (temp_config.b_o_alarma != 0);
-			b_p_alarma = (temp_config.b_p_alarma != 0);
-			
+			b_o_alarma = (0 != temp_config.b_o_alarma);
+			b_p_alarma = (0 != temp_config.b_p_alarma);
 			g_last_saved_config = temp_config;
-			
-			LOGGER_INFO("Configuracion cargada desde EEPROM con exito.");
+			LOGGER_INFO("Perfil %d cargado desde EEPROM", g_current_profile_id);
 		}
 		else
 		{
-			LOGGER_INFO("EEPROM vacia o magic word incorrecto. Se usaran valores por defecto.");
+			LOGGER_INFO("EEPROM vacia para perfil %d. Cargando defaults.", g_current_profile_id);
+			set_default_thresholds(g_current_profile_id);
 			memset(&g_last_saved_config, 0, sizeof(sys_config_t));
+			task_system_save_config(); /* Guardamos defaults */
 		}
 	}
 	else
 	{
-		LOGGER_ERROR("Error leyendo EEPROM al arrancar.");
+		LOGGER_ERROR("Error I2C en EEPROM perfil %d", g_current_profile_id);
+		set_default_thresholds(g_current_profile_id);
 		memset(&g_last_saved_config, 0, sizeof(sys_config_t));
 	}
 }
@@ -778,22 +860,18 @@ static void task_system_save_config(void)
 	new_config.b_o_alarma = b_o_alarma ? 1 : 0;
 	new_config.b_p_alarma = b_p_alarma ? 1 : 0;
 	
-	if (memcmp(&new_config, &g_last_saved_config, sizeof(sys_config_t)) == 0)
+	if (0 == memcmp(&new_config, &g_last_saved_config, sizeof(sys_config_t)))
 	{
-		LOGGER_INFO("Configuracion sin cambios. Se omite escritura en EEPROM.");
 		return;
 	}
 	
 	g_current_config = new_config;
 	g_last_saved_config = new_config;
+	uint16_t mem_addr = get_eeprom_address(g_current_profile_id);
 	
-	if (eeprom_write_it(0x0000, (uint8_t*)&g_current_config, sizeof(sys_config_t)) == EEPROM_OK)
+	if (EEPROM_OK == eeprom_write_it(mem_addr, (uint8_t*)&g_current_config, sizeof(sys_config_t)))
 	{
-		LOGGER_INFO("Guardando configuracion modificada en EEPROM...");
-	}
-	else
-	{
-		LOGGER_ERROR("Fallo al iniciar el guardado asincrono de EEPROM.");
+		LOGGER_INFO("Guardando configuracion asincrono...");
 	}
 }
 
@@ -816,6 +894,12 @@ bool task_system_is_alarm_active(void)
 {
 	extern int32_t g_algo_current_spo2;
 	extern int32_t g_algo_current_bpm;
+	
+	/* Master switch overriding */
+	if (DIP_OFF == HAL_GPIO_ReadPin(DIP4_PORT, DIP4_PIN))
+	{
+		return false;
+	}
 	
 	if (b_o_alarma && (g_algo_current_spo2 > g_ou_max || g_algo_current_spo2 < g_ou_min)) return true;
 	if (b_p_alarma && (g_algo_current_bpm > g_pu_max || g_algo_current_bpm < g_pu_min)) return true;

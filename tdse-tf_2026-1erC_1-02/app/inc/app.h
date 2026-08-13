@@ -13,6 +13,8 @@ extern "C" {
 /********************** typedef **********************************************/
 
 /********************** external data declaration ****************************/
+extern uint32_t g_app_cnt;
+extern uint32_t g_app_runtime_us;
 
 /********************** external functions declaration ***********************/
 extern void app_init(void);
